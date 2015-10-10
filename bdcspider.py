@@ -34,8 +34,12 @@ CURPAGE="page-input"
 PAGENEXT="page-next"
 
 #userinfo
-FLAG_SOURCE_USE=1
-FLAG_SOURCE_UNUSE=0
+FLAG_UI_USE=1
+FLAG_UI_UNUSE=0
+FLAG_UI_IN_DICT=2
+FLAG_UI_IN_DELDICT=3
+FLAG_UI_NOT_IN_DICT=4
+
 USERNAME_CLASS="brieftext"
 USERNAME_CLASS2="homepagelink"
 USERINFO_CLASS="sharenum"
@@ -55,6 +59,7 @@ PIECE_SHARE=0
 PIECE_ALBUM=1
 PIECE_SUB=2
 PIECE_LISTENER=3
+PIECE_PAGING_ID="personagePage"
 
 #-------------------helper--------------------------
 
@@ -82,15 +87,20 @@ def tointhelper(str):
         str=str.replace(TEI,CHARTOINT[TEI])
     return int(str)
 
-#-------------------end helper----------------------
-
 def signal_handler(signal, frame):
     sp.stat()
     sys.exit(0)
 
+def bdcpanic(msg):
+        print "bdcpanic [%s]" % (msg)
+        sys.exit(-1)
+
+
+#-------------------end helper----------------------
+
 class userinfo:
     def __init__(self):
-        self.flag=FLAG_SOURCE_UNUSE
+        self.flag=FLAG_UI_UNUSE
         self.name=None
         self.sharesize=None
         self.shareurl=None
@@ -129,18 +139,25 @@ class ev:
 
     def loop(self):
         sp=self.data
-        queue=sp.uiqueue
+        uidict=sp.uidict
         cbs=self.cbs
-        while(len(queue)>0):
-            print "\nthere are %d sources in queue" % len(queue)
-            src=queue.popleft()
+        while(len(uidict)>0):
+            print "\nthere are %d userinfo in dict" % len(uidict)
+            keys=uidict.keys()
+            assert len(keys) >= 1
+            try:
+                src=uidict.pop(keys[0])
+            except KeyError,e:
+                bdcpanic(msg)
+            sp.deluidict[src.name]=src
+
             cb=cbs[FLAG_EV_FETCH_DATA]
             if(cb):
                 cb(src,self.data)
             cb=cbs[FLAG_EV_FETCH_SOURCE]
             if(cb):
                 cb(src,self.data)
-        print "there are %d sources in queue" % len(queue)
+        print "there are %d userinfo in dict" % len(uidict)
 
 
 class baidufetch:
@@ -151,10 +168,11 @@ class baidufetch:
     def start(self):
         self.browser = webdriver.Firefox()
 
-    def getpieces(self):
+    def getpieces(self,src):
         b=self.browser
         count=0
         pindex=None
+        sp=self.sp
 
         try:
             pagesize=self.getpanelpagesize()
@@ -191,11 +209,19 @@ class baidufetch:
                 srcadd.albumsize=tointhelper(srcadd.albumsize)
                 srcadd.subscribesize=tointhelper(srcadd.subscribesize)
                 srcadd.listenersize=tointhelper(srcadd.listenersize)    #todo:if size was chinese represent then failed
-                srcadd.flag=FLAG_SOURCE_UNUSE
+                srcadd.flag=FLAG_UI_UNUSE
 
                 if(DDEBUG):
                     print "getuserinfo name:%s sharesize:%d albumsize:%d subsize:%d listenersize:%d shareurl:%s" % (srcadd.name,srcadd.sharesize,srcadd.albumsize,srcadd.subscribesize,srcadd.listenersize,srcadd.shareurl)
-                self.sp.uiqueue.append(srcadd)
+
+                if(src.name!=srcadd.name): 
+                    ret=sp.uiexists(srcadd)
+                    if(ret==FLAG_UI_IN_DICT or ret==FLAG_UI_NOT_IN_DICT):
+                        sp.uidict[srcadd.name]=srcadd
+                    elif(ret==FLAG_UI_IN_DELDICT):
+                        pass
+                else:
+                    self.repusers+=1    #pass if same with current userinfo
                 pindex+=1
 
             print "fetch %d userinfo in page%d" % ((pindex+1),(count+1))
@@ -211,18 +237,18 @@ class baidufetch:
             print "goto subscribeurl"
             b.get(src.subcribeurl)
             time.sleep(8)
-            self.getpieces()
+            self.getpieces(src)
 
         if(src.listenersize>0):
             print "goto listenerurl"
             b.get(src.listenerurl)
             time.sleep(8)
-            self.getpieces()
+            self.getpieces(src)
 
     def getpanelnextpage(self):
         b=self.browser
-        pc=b.find_element_by_class_name("personage-panel")
-        pi=pc.find_element_by_id("personagePage")
+        pc=b.find_element_by_class_name(PIECE_CLASS)
+        pi=pc.find_element_by_id(PIECE_PAGING_ID)
         pc1=pi.find_element_by_class_name(PAGESIZE1_CLASS)
         nextpage=pc1.find_element_by_class_name(PAGENEXT)
         return nextpage
@@ -230,8 +256,8 @@ class baidufetch:
     def getpanelpagesize(self):
         b=self.browser
         b.switch_to.frame(0)
-        pc=b.find_element_by_class_name("personage-panel")
-        pi=pc.find_element_by_id("personagePage")
+        pc=b.find_element_by_class_name(PIECE_CLASS)
+        pi=pc.find_element_by_id(PIECE_PAGING_ID)
         pc1=pi.find_element_by_class_name(PAGESIZE1_CLASS)
         pagesize=pc1.find_element_by_class_name(PAGESIZE_CLASS).text
         return pagesize
@@ -269,7 +295,7 @@ class baidufetch:
         src.listenersize=tointhelper(v2[1].text)
         src.listenerurl=v2[0].get_attribute(HREF)
 
-        src.flag=FLAG_SOURCE_USE
+        src.flag=FLAG_UI_USE
         
         if(DDEBUG):
             print "parseuser name:%s sharesize:%s albumsize:%s subsize:%d listenersize:%d url:%s" % (src.name,src.sharesize,src.albumsize,src.subscribesize,src.listenersize,src.listenerurl)
@@ -284,7 +310,7 @@ class baidufetch:
         fsize=0
 
         b.get(src.shareurl)
-        if(src.flag==FLAG_SOURCE_UNUSE):
+        if(src.flag==FLAG_UI_UNUSE):
             self.parseuser(src)
         print "goto %s sourcelist" % (src.name)
 
@@ -324,18 +350,38 @@ class baidufetch:
 
 class spider:
     def __init__(self):
-        self.uiqueue=deque([])
+        self.uidict=dict()
+        self.deluidict=dict()
         self.ev=ev(self)
         self.start_time=time.time()
         self.end_time=None
         self.fetch=None
         self.fetchsrcs=0
         self.dropsrcs=0
-        self.dropuser=0
+        self.repusers=0
         self.dbwriter=None
 
     def adddbwriter(self,w):
         self.dbwriter=w
+
+    def uiexists(self,src):
+        try:
+            if(sp.uidict[src.name]):
+                if(DDEBUG):
+                    print "%s exist in dict" % (src.name)
+                self.repusers+=1
+                return FLAG_UI_IN_DICT
+        except KeyError,e:
+            pass
+        try:
+            if(sp.deluidict[src.name]):
+                if(DDEBUG):
+                    print "%s exist in deldict" % (src.name)
+                self.repusers+=1
+                return FLAG_UI_IN_DELDICT
+        except KeyError,e:
+            pass
+        return FLAG_UI_NOT_IN_DICT
 
     def addfetcher(self,fe):
         self.fetch=fe
@@ -354,7 +400,8 @@ class spider:
     def stat(self):
         self.end_time=time.time()
         print "-------------------------stat-----------------------------"
-        print "fetchs:%d drops:%d" % (self.fetchsrcs,self.dropsrcs)
+        print "fetchs:%d drops:%d drop repeat users:%d" % (self.fetchsrcs,self.dropsrcs,self.repusers)
+        print "%d userinfo in uidict ,%d userinfo in deluidict" % (len(self.uidict),len(self.deluidict))
         print "run time %ds" % (self.end_time-self.start_time)
         print "----------------------------------------------------------"
 
@@ -376,7 +423,7 @@ def main():
 
     firstsrc=userinfo()
     firstsrc.shareurl=SOURCE_FIRST
-    sp.uiqueue.append(firstsrc)
+    sp.uidict[SOURCE_FIRST]=firstsrc
     sp.show()
     sp.start()
     sp.finish()
