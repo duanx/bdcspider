@@ -18,7 +18,7 @@ FLAG_EV_FETCH_USERINFO=1
 FLAG_EV_FETCH_SOURCE=2
 
 BASEURL="http://yun.baidu.com"
-SOURCE_FIRST=BASEURL+"/share/home?uk=510097768"
+SOURCE_FIRST=BASEURL+"/share/home?uk=2335513473"
 
 #sourcelist
 SOURCEVIEW_ID="infiniteListView"
@@ -382,6 +382,7 @@ class baidufetch:
         fsize=0
 
         b.get(src.shareurl)
+        time.sleep(2)
         print "goto %s sourcelist" % (src.name)
 
         pagesize=self.getpagesize()
@@ -401,7 +402,6 @@ class baidufetch:
                     break
                 except Exception,e:
                     print e
-                    flish.clear()
                     time.sleep(2)
             if pagesize>1:
                 nextpage=self.getnextpage()
