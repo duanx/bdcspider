@@ -10,15 +10,15 @@ import signal
 import sys
 
 DDEBUG=0
-VERSION=0.1
+VERSION=0.2
 APP="bdcspider"
 
 #event flags
-FLAG_EV_FETCH_SOURCE=1
-FLAG_EV_FETCH_DATA=2
+FLAG_EV_FETCH_USERINFO=1
+FLAG_EV_FETCH_SOURCE=2
 
 BASEURL="http://yun.baidu.com"
-SOURCE_FIRST=BASEURL+"/share/home?uk=2284033209"
+SOURCE_FIRST=BASEURL+"/share/home?uk=510097768"
 
 #sourcelist
 SOURCEVIEW_ID="infiniteListView"
@@ -166,20 +166,32 @@ class ev:
         cbs=self.cbs
         while(len(uidict)>0):
             print "\nthere are %d userinfo in dict" % len(uidict)
-            keys=uidict.keys()
-            assert len(keys) >= 1
-            try:
-                src=uidict.pop(keys[0])
-            except KeyError,e:
-                bdcpanic(e)
-            sp.deluidict[src.name]=src
+            uimax=sp.getmaxsharesize()
+            assert(uimax is not None)
+            if(uimax.flag==FLAG_UI_UNUSE):
+                sp.fetch.browser.get(uimax.shareurl)
+                sp.fetch.parseuser(uimax)
 
-            cb=cbs[FLAG_EV_FETCH_DATA]
-            if(cb):
-                cb(src,self.data)
+                #repair first user's dict
+                del uidict[uimax.shareurl]
+                uidict[uimax.name]=uimax
+
+                cb=cbs[FLAG_EV_FETCH_USERINFO]
+                if(cb):
+                    cb(uimax,self.data)
+
             cb=cbs[FLAG_EV_FETCH_SOURCE]
             if(cb):
-                cb(src,self.data)
+                cb(uimax,self.data)
+            cb=cbs[FLAG_EV_FETCH_USERINFO]
+            if(cb):
+                cb(uimax,self.data)
+            try:
+                del uidict[uimax.name]
+            except KeyError,e:
+                bdcpanic(e)
+            sp.deluidict[uimax.name]=uimax
+
         print "there are %d userinfo in dict" % len(uidict)
 
 class baidufetch:
@@ -251,7 +263,7 @@ class baidufetch:
                     sp.repusers+=1    #pass if same with current userinfo
                 pindex+=1
 
-            print "fetch %d userinfo in page%d totalpage:%d" % ((pindex+1),(count+1),pagesize)
+            print "fetch %d userinfo in page%d totalpage:%d" % (pindex,(count+1),pagesize)
             if(pagesize>1):
                 nextpage=self.getpanelnextpage()
                 clickhelper(nextpage)
@@ -370,8 +382,6 @@ class baidufetch:
         fsize=0
 
         b.get(src.shareurl)
-        if(src.flag==FLAG_UI_UNUSE):
-            self.parseuser(src)
         print "goto %s sourcelist" % (src.name)
 
         pagesize=self.getpagesize()
@@ -469,7 +479,22 @@ class spider:
     def finish(self):
         self.stat()
         self.dbwriter.finish()
-        #self.fetch.finish()
+        #self.fetch.finish()  #todo exception when firefox quit
+
+    #todo O(n)
+    def getmaxsharesize(self):
+        ud=self.uidict
+        uitems=ud.values()
+        uimax=uitems[0]
+        i=1
+        l=len(uitems)
+        assert(len(uitems)>0)
+
+        while(i<l):
+            if(uimax.sharesize<uitems[i].sharesize):
+                uimax=uitems[i]
+            i+=1
+        return uimax
 
 sp=spider()
 
@@ -477,13 +502,14 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     fe=baidufetch()
     ev=sp.ev
-    ev.addlistener(FLAG_EV_FETCH_SOURCE,fe.fetchuserinfo)
-    ev.addlistener(FLAG_EV_FETCH_DATA,fe.fetchsrcdata)
+    ev.addlistener(FLAG_EV_FETCH_USERINFO,fe.fetchuserinfo)
+    ev.addlistener(FLAG_EV_FETCH_SOURCE,fe.fetchsrcdata)
     dbw=dbwriter("bdcsources.txt")
     sp.addfetcher(fe)
     sp.adddbwriter(dbw)
 
     firstsrc=userinfo()
+    firstsrc.flag=FLAG_UI_UNUSE
     firstsrc.shareurl=SOURCE_FIRST
     sp.uidict[SOURCE_FIRST]=firstsrc
     sp.show()
