@@ -49,19 +49,19 @@ SUBSIZE_CLASS="concerncnt"
 LISTENERSIZE_CLASS="fanscnt"
 HREF="href"
 
-#piecelist
-PIECE_CLASS="personage-panel"
-PIECE_CLASS2="share-personage-item"
-PIECE_USERNAME_CLASS="share-personage-name"
-PIECE_PANEL_CLASS="share-personage-msg"
-PIECE_PANEL_CLASS2="a[target=\"_blank\"]"
-PIECE_SHARE=0
-PIECE_ALBUM=1
-PIECE_SUB=2
-PIECE_LISTENER=3
-PIECE_PAGING_ID="personagePage"
+#panellist
+PANEL_CLASS="personage-panel"
+PANEL_CLASS2="share-personage-item"
+PANEL_USERNAME_CLASS="share-personage-name"
+PANEL_PANEL_CLASS="share-personage-msg"
+PANEL_PANEL_CLASS2="a[target=\"_blank\"]"
+PANEL_SHARE=0
+PANEL_ALBUM=1
+PANEL_SUB=2
+PANEL_LISTENER=3
+PANEL_PAGING_ID="personagePage"
 
-#-------------------helper--------------------------
+#####################################################################################################
 
 BI=u"\u4ebf" #for "äº¿"
 MI=u"\u4e07" #for "ä¸‡"
@@ -106,9 +106,13 @@ def clickhelper(elem):
         print e
         time.sleep(1)
         clickhelper(elem)
+ 
+def goto(browser,url):
+    browser.get(url)
+    time.sleep(2)
 
-#-------------------end helper----------------------
 
+#####################################################################################################
 class userinfo:
     def __init__(self):
         self.flag=FLAG_UI_UNUSE
@@ -122,12 +126,71 @@ class userinfo:
         self.listenersize=0
         self.listenerurl=None
 
+#####################################################################################################
+class uidb: #userinfo database
+    def __init__(self):
+        self.uidict=dict() #running user database
+        self.finishuidict=dict() #run finished user database
+        self.repusers=0
+        self.dropusers=0
+
+    def size(self):
+        return len(self.uidict)
+
+    #todo O(n)
+    def getmaxsharesize(self):
+        ud=self.uidict
+        uitems=ud.values()
+        uimax=uitems[0]
+        i=1
+        l=len(uitems)
+        assert(len(uitems)>0)
+
+        while(i<l):
+            if(uimax.sharesize<uitems[i].sharesize):
+                uimax=uitems[i]
+            i+=1
+        return uimax
+
+    def dbadd(self,user):
+        self.uidict[user.name]=user
+
+    def dbaddkv(self,key,val):
+        self.uidict[key]=val
+
+    def dbdel(self,user):
+        dbdelkey(self,user.name)
+
+    def dbdelkey(self,key):
+        val=self.uidict.pop(key)
+        self.finishuidict[key]=val
+
+    def dbexists(self,user):
+        try:
+            if(self.uidict[user.name]):
+                if(DDEBUG):
+                    print "%s exist in dict" % (user.name)
+                self.repusers+=1
+                return FLAG_UI_IN_DICT
+        except KeyError,e:
+            pass
+        try:
+            if(self.finishuidict[user.name]):
+                if(DDEBUG):
+                    print "%s exist in deldict" % (user.name)
+                self.dropusers+=1
+                return FLAG_UI_IN_DELDICT
+        except KeyError,e:
+            pass
+        return FLAG_UI_NOT_IN_DICT
+#####################################################################################################
 class sourcedata:
     def __init__(self,n,u):
         self.name=n
         self.url=u
         self.sharetime=None
 
+#####################################################################################################
 class dbwriter:
     def __init__(self,path):
         try:
@@ -152,48 +215,50 @@ class dbwriter:
     def finish(self):
         self.fd.close()
 
+#####################################################################################################
 class ev:
     def __init__(self,data):
-        self.cbs=dict()
-        self.data=data
+        self.cbs=dict() #event callback
+        self.data=data #data for callback
 
     def addlistener(self,flag,listener):
         self.cbs[flag]=listener
 
     def loop(self):
         sp=self.data
-        uidict=sp.uidict
-        cbs=self.cbs
-        while(len(uidict)>0):
-            print "\nthere are %d userinfo in dict" % len(uidict)
-            uimax=sp.getmaxsharesize()
+        uidb=sp.uidb
+        cbs=self.cbs #ÊÂ¼þ»Øµ÷
+        
+        while(uidb.size()>0):
+            print "\nthere are %d userinfo in dict" % uidb.size()
+            uimax=uidb.getmaxsharesize() #×î´ó¹²ÏíÊýÓÃ»§
             assert(uimax is not None)
-            if(uimax.flag==FLAG_UI_UNUSE):
-                sp.fetch.browser.get(uimax.shareurl)
+            if(uimax.flag==FLAG_UI_UNUSE):#Ê×´ÎÔËÐÐ,ÏÈ½âÎö¸öÈË¶©ÔÄ/·ÛË¿Ïî
                 sp.fetch.parseuser(uimax)
-
-                #repair first user's dict
-                del uidict[uimax.shareurl]
-                uidict[uimax.name]=uimax
 
                 cb=cbs[FLAG_EV_FETCH_USERINFO]
                 if(cb):
                     cb(uimax,self.data)
 
-            cb=cbs[FLAG_EV_FETCH_SOURCE]
-            if(cb):
-                cb(uimax,self.data)
-            cb=cbs[FLAG_EV_FETCH_USERINFO]
-            if(cb):
-                cb(uimax,self.data)
+                cb=cbs[FLAG_EV_FETCH_SOURCE]
+                if(cb):
+                    cb(uimax,self.data)
+            else: #»ñÈ¡Ô´Êý¾Ý£¬½âÎö¸öÈË¶©ÔÄ/·ÛË¿Ïî
+                cb=cbs[FLAG_EV_FETCH_SOURCE]
+                if(cb):
+                    cb(uimax,self.data)
+
+                cb=cbs[FLAG_EV_FETCH_USERINFO]
+                if(cb):
+                    cb(uimax,self.data)
             try:
-                del uidict[uimax.name]
+                uidb.udel(uimax.name)
             except KeyError,e:
                 bdcpanic(e)
-            sp.deluidict[uimax.name]=uimax
 
-        print "there are %d userinfo in dict" % len(uidict)
+        print "there are %d userinfo in dict" % uidb.size()
 
+#####################################################################################################
 class baidufetch:
     def __init__(self):
         self.browser=None
@@ -202,65 +267,62 @@ class baidufetch:
     def start(self):
         self.browser = webdriver.Firefox()
 
-    def getpieces(self,src):
+    def getpanel(self,curuser): #»ñÈ¡¸öÈË¶©ÔÄ/·ÛË¿ÏîÁÐ±í
         b=self.browser
         count=0
         pindex=None
         sp=self.sp
 
         pagesize=self.getpanelpagesize()
-        pagesize=int(pagesize)
         assert (pagesize>0)
         print "total %d pages" % (pagesize)
 
         while(count<pagesize):
             try:
-                v1=b.find_element_by_class_name(PIECE_CLASS)
-                v2=v1.find_elements_by_class_name(PIECE_CLASS2)
+                v1=b.find_element_by_class_name(PANEL_CLASS)
+                v2=v1.find_elements_by_class_name(PANEL_CLASS2)
             except Exception,e:
                 print e
                 time.sleep(2)
                 continue
             pindex=0
             while(pindex<len(v2)):
-                #parse one userpiece to userinfo
+                #parse one userdata to userinfo
                 elem=v2[pindex]
                 try:
-                    vu=elem.find_element_by_class_name(PIECE_USERNAME_CLASS)
-                    v3=elem.find_element_by_class_name(PIECE_PANEL_CLASS)
-                    v4=v3.find_elements_by_css_selector(PIECE_PANEL_CLASS2)
-                    srcadd=userinfo()
-                    srcadd.name=vu.text
-                    srcadd.sharesize=v4[PIECE_SHARE].find_elements_by_xpath("b")[0].text
-                    srcadd.shareurl=v4[PIECE_SHARE].get_attribute(HREF)    
-                    srcadd.albumsize=v4[PIECE_ALBUM].find_elements_by_xpath("b")[0].text
-                    srcadd.albumurl=v4[PIECE_ALBUM].get_attribute(HREF)    
-                    srcadd.subscribesize=v4[PIECE_SUB].find_elements_by_xpath("b")[0].text
-                    srcadd.subcribeurl=v4[PIECE_SUB].get_attribute(HREF)
-                    srcadd.listenersize=v4[PIECE_LISTENER].find_elements_by_xpath("b")[0].text
-                    srcadd.listenerurl=v4[PIECE_LISTENER].get_attribute(HREF)
+                    vu=elem.find_element_by_class_name(PANEL_USERNAME_CLASS)
+                    v3=elem.find_element_by_class_name(PANEL_PANEL_CLASS)
+                    v4=v3.find_elements_by_css_selector(PANEL_PANEL_CLASS2)
+                    useradd=userinfo()
+                    useradd.name=vu.text
+                    useradd.sharesize=v4[PANEL_SHARE].find_elements_by_xpath("b")[0].text
+                    useradd.shareurl=v4[PANEL_SHARE].get_attribute(HREF)    
+                    useradd.albumsize=v4[PANEL_ALBUM].find_elements_by_xpath("b")[0].text
+                    useradd.albumurl=v4[PANEL_ALBUM].get_attribute(HREF)    
+                    useradd.subscribesize=v4[PANEL_SUB].find_elements_by_xpath("b")[0].text
+                    useradd.subcribeurl=v4[PANEL_SUB].get_attribute(HREF)
+                    useradd.listenersize=v4[PANEL_LISTENER].find_elements_by_xpath("b")[0].text
+                    useradd.listenerurl=v4[PANEL_LISTENER].get_attribute(HREF)
                 except Exception,e:
                     print e
                     time.sleep(2)
                     continue
 
-                srcadd.sharesize=tointhelper(srcadd.sharesize)
-                srcadd.albumsize=tointhelper(srcadd.albumsize)
-                srcadd.subscribesize=tointhelper(srcadd.subscribesize)
-                srcadd.listenersize=tointhelper(srcadd.listenersize)
-                srcadd.flag=FLAG_UI_USE
+                useradd.sharesize=tointhelper(useradd.sharesize)
+                useradd.albumsize=tointhelper(useradd.albumsize)
+                useradd.subscribesize=tointhelper(useradd.subscribesize)
+                useradd.listenersize=tointhelper(useradd.listenersize)
+                useradd.flag=FLAG_UI_USE
 
                 if(DDEBUG):
-                    print "getuserinfo name:%s sharesize:%d albumsize:%d subsize:%d listenersize:%d shareurl:%s" % (srcadd.name,srcadd.sharesize,srcadd.albumsize,srcadd.subscribesize,srcadd.listenersize,srcadd.shareurl)
+                    print "getuserinfo name:%s sharesize:%d albumsize:%d subsize:%d listenersize:%d shareurl:%s" % (useradd.name,useradd.sharesize,useradd.albumsize,useradd.subscribesize,useradd.listenersize,useradd.shareurl)
 
-                if(src.name!=srcadd.name): 
-                    ret=sp.uiexists(srcadd)
-                    if(ret==FLAG_UI_IN_DICT or ret==FLAG_UI_NOT_IN_DICT):
-                        sp.uidict[srcadd.name]=srcadd
-                    elif(ret==FLAG_UI_IN_DELDICT):
-                        pass
-                else:
-                    sp.repusers+=1    #pass if same with current userinfo
+                if(curuser.name==useradd.name): #¹ýÂË×Ô¼º
+                    pindex+=1
+                    continue
+                ret=sp.uidb.dbexists(useradd)
+                if ret is not FLAG_UI_IN_DELDICT: 
+                    sp.uidb.dbadd(useradd)
                 pindex+=1
 
             print "fetch %d userinfo in page%d totalpage:%d" % (pindex,(count+1),pagesize)
@@ -269,26 +331,24 @@ class baidufetch:
                 clickhelper(nextpage)
             count+=1
 
-    def fetchuserinfo(self,src,data):
+    def fetchuserinfo(self,user,data):
         b=self.browser
-        if(src.subscribesize>0):
+        if(user.subscribesize>0):
             print "goto subscribeurl"
-            b.get(src.subcribeurl)
-            time.sleep(1)
-            self.getpieces(src)
+            goto(b,user.subcribeurl)
+            self.getpanel(user)
 
-        if(src.listenersize>0):
+        if(user.listenersize>0):
             print "goto listenerurl"
-            b.get(src.listenerurl)
-            time.sleep(3)
-            self.getpieces(src)
+            goto(b,user.listenerurl)
+            self.getpanel(user)
 
     def getpanelnextpage(self):
         b=self.browser
         while True:
             try:
-                pc=b.find_element_by_class_name(PIECE_CLASS)
-                pi=pc.find_element_by_id(PIECE_PAGING_ID)
+                pc=b.find_element_by_class_name(PANEL_CLASS)
+                pi=pc.find_element_by_id(PANEL_PAGING_ID)
                 pc1=pi.find_element_by_class_name(PAGESIZE1_CLASS)
                 nextpage=pc1.find_element_by_class_name(PAGENEXT)
                 break
@@ -302,8 +362,8 @@ class baidufetch:
         while True:
             try:
                 b.switch_to.frame(0)
-                pc=b.find_element_by_class_name(PIECE_CLASS)
-                pi=pc.find_element_by_id(PIECE_PAGING_ID)
+                pc=b.find_element_by_class_name(PANEL_CLASS)
+                pi=pc.find_element_by_id(PANEL_PAGING_ID)
                 pc1=pi.find_element_by_class_name(PAGESIZE1_CLASS)
                 pagesize=pc1.find_element_by_class_name(PAGESIZE_CLASS).text
                 break
@@ -315,6 +375,7 @@ class baidufetch:
             except Exception,e:
                 print e
                 time.sleep(2)
+        pagesize=int(pagesize)
         return pagesize
 
     def getnextpage(self):
@@ -344,30 +405,37 @@ class baidufetch:
             except Exception,e:
                 print e
                 time.sleep(2)
+        pagesize=int(pagesize)
         return pagesize
 
-    def parseuser(self,src):
+    def parseuser(self,user): #Ê×´ÎÔËÐÐ£¬Í¨¹ýurl»ñÈ¡ÓÃ»§¹²ÏíÊý£¬¶©ÔÄ/·ÛË¿Ïî
         b=self.browser
+        uidb=self.sp.uidb
+
+        goto(b,user.shareurl)
         v1=b.find_element_by_class_name(USERNAME_CLASS)
         v2=v1.find_element_by_class_name(USERNAME_CLASS2)
-        src.name=v2.text
+        user.name=v2.text
 
         v1=b.find_element_by_class_name(USERINFO_CLASS)
         v2=v1.find_element_by_id(SHARESIZE_ID)
-        src.sharesize=tointhelper(v2.text)
+        user.sharesize=tointhelper(v2.text)
 
         v2=v1.find_element_by_id(ALBUMSIZE_ID)
-        src.albumsize=tointhelper(v2.text)
+        user.albumsize=tointhelper(v2.text)
 
         v2=v1.find_elements_by_class_name(SUBSIZE_CLASS)
-        src.subscribesize=tointhelper(v2[1].text)
-        src.subcribeurl=v2[0].get_attribute(HREF)
+        user.subscribesize=tointhelper(v2[1].text)
+        user.subcribeurl=v2[0].get_attribute(HREF)
 
         v2=v1.find_elements_by_class_name(LISTENERSIZE_CLASS)
-        src.listenersize=tointhelper(v2[1].text)
-        src.listenerurl=v2[0].get_attribute(HREF)
+        user.listenersize=tointhelper(v2[1].text)
+        user.listenerurl=v2[0].get_attribute(HREF)
 
-        src.flag=FLAG_UI_USE
+        #repair first user's dict
+        del uidb.uidict[user.shareurl]
+        uidb.dbadd(user)
+        user.flag=FLAG_UI_USE
 
         if(DDEBUG):
             print "parseuser name:%s sharesize:%s albumsize:%s subsize:%d listenersize:%d url:%s" % (src.name,src.sharesize,src.albumsize,src.subscribesize,src.listenersize,src.listenerurl)
@@ -380,16 +448,14 @@ class baidufetch:
         b=self.browser
         flist=[]
         fsize=0
+        count=0
 
-        b.get(src.shareurl)
-        time.sleep(2)
         print "goto %s sourcelist" % (src.name)
+        goto(b,src.shareurl)
 
         pagesize=self.getpagesize()
-        pagesize=int(pagesize)
         assert (pagesize>0)
         print "total %d pages" % (pagesize)
-        count=0
         while(count<pagesize):
             while True:
                 try:
@@ -403,6 +469,7 @@ class baidufetch:
                 except Exception,e:
                     print e
                     time.sleep(2)
+
             if pagesize>1:
                 nextpage=self.getnextpage()
                 clickhelper(nextpage)
@@ -418,41 +485,21 @@ class baidufetch:
             print "maybe user shares new when fetching..."
         sp.fetchsrcs+=fsize
 
+#####################################################################################################
 class spider:
     def __init__(self):
-        self.uidict=dict()
-        self.deluidict=dict()
+        self.uidb=uidb()
         self.ev=ev(self)
         self.start_time=time.time()
         self.end_time=None
         self.fetch=None
+        self.dbwriter=None
         self.fetchsrcs=0
         self.dropsrcs=0
-        self.repusers=0
-        self.dropusers=0
-        self.dbwriter=None
 
     def adddbwriter(self,w):
         self.dbwriter=w
 
-    def uiexists(self,src):
-        try:
-            if(sp.uidict[src.name]):
-                if(DDEBUG):
-                    print "%s exist in dict" % (src.name)
-                self.repusers+=1
-                return FLAG_UI_IN_DICT
-        except KeyError,e:
-            pass
-        try:
-            if(sp.deluidict[src.name]):
-                if(DDEBUG):
-                    print "%s exist in deldict" % (src.name)
-                self.repusers+=1
-                return FLAG_UI_IN_DELDICT
-        except KeyError,e:
-            pass
-        return FLAG_UI_NOT_IN_DICT
 
     def addfetcher(self,fe):
         self.fetch=fe
@@ -471,8 +518,8 @@ class spider:
     def stat(self):
         self.end_time=time.time()
         print "-------------------------stat-----------------------------"
-        print "fetchsources:%d dropsources:%d repeat users:%d drop users:%d" % (self.fetchsrcs,self.dropsrcs,self.repusers,self.dropusers)
-        print "%d userinfo in uidict ,%d userinfo in deluidict" % (len(self.uidict),len(self.deluidict))
+        print "fetchsources:%d dropsources:%d repeat users:%d drop users:%d" % (self.fetchsrcs,self.dropsrcs,self.uidb.repusers,self.uidb.dropusers)
+        print "%d userinfo waiting,%d userinfo finished in userdb" % (len(self.uidb.uidict),len(self.uidb.finishuidict))
         print "run time %ds" % (self.end_time-self.start_time)
         print "----------------------------------------------------------"
 
@@ -481,23 +528,10 @@ class spider:
         self.dbwriter.finish()
         #self.fetch.finish()  #todo exception when firefox quit
 
-    #todo O(n)
-    def getmaxsharesize(self):
-        ud=self.uidict
-        uitems=ud.values()
-        uimax=uitems[0]
-        i=1
-        l=len(uitems)
-        assert(len(uitems)>0)
-
-        while(i<l):
-            if(uimax.sharesize<uitems[i].sharesize):
-                uimax=uitems[i]
-            i+=1
-        return uimax
 
 sp=spider()
 
+#####################################################################################################
 def main():
     signal.signal(signal.SIGINT, signal_handler)
     fe=baidufetch()
@@ -511,10 +545,11 @@ def main():
     firstsrc=userinfo()
     firstsrc.flag=FLAG_UI_UNUSE
     firstsrc.shareurl=SOURCE_FIRST
-    sp.uidict[SOURCE_FIRST]=firstsrc
+    sp.uidb.dbaddkv(SOURCE_FIRST,firstsrc)
     sp.show()
     sp.start()
     sp.finish()
 
 if __name__=="__main__":
     main()
+#####################################################################################################
