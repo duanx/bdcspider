@@ -18,7 +18,7 @@ FLAG_EV_FETCH_USERINFO=1
 FLAG_EV_FETCH_SOURCE=2
 
 BASEURL="http://yun.baidu.com"
-SOURCE_FIRST=BASEURL+"/share/home?uk=2335513473"
+SOURCE_FIRST=BASEURL+"/share/home?uk=1864871638"
 
 #sourcelist
 SOURCEVIEW_ID="infiniteListView"
@@ -98,19 +98,6 @@ def bdcpanic(msg):
     print "--------------------------------------------------------"
     sys.exit(-1)
 
-def clickhelper(elem):
-    try:
-        elem.click()
-        time.sleep(3)
-    except common.exceptions.StaleElementReferenceException,e:
-        print e
-        time.sleep(1)
-        clickhelper(elem)
- 
-def goto(browser,url):
-    browser.get(url)
-    time.sleep(2)
-
 
 #####################################################################################################
 class userinfo:
@@ -158,12 +145,12 @@ class uidb: #userinfo database
     def dbaddkv(self,key,val):
         self.uidict[key]=val
 
-    def dbdel(self,user):
-        dbdelkey(self,user.name)
-
     def dbdelkey(self,key):
         val=self.uidict.pop(key)
         self.finishuidict[key]=val
+
+    def dbdel(self,user):
+        self.dbdelkey(user.name)
 
     def dbexists(self,user):
         try:
@@ -236,23 +223,18 @@ class ev:
             if(uimax.flag==FLAG_UI_UNUSE):#首次运行,先解析个人订阅/粉丝项
                 sp.fetch.parseuser(uimax)
 
-                cb=cbs[FLAG_EV_FETCH_USERINFO]
-                if(cb):
-                    cb(uimax,self.data)
+             #获取源数据，
+            cb=cbs[FLAG_EV_FETCH_SOURCE]
+            if(cb):
+                cb(uimax,self.data)
 
-                cb=cbs[FLAG_EV_FETCH_SOURCE]
-                if(cb):
-                    cb(uimax,self.data)
-            else: #获取源数据，解析个人订阅/粉丝项
-                cb=cbs[FLAG_EV_FETCH_SOURCE]
-                if(cb):
-                    cb(uimax,self.data)
+            #解析个人订阅/粉丝项
+            cb=cbs[FLAG_EV_FETCH_USERINFO]
+            if(cb):
+                cb(uimax,self.data)
 
-                cb=cbs[FLAG_EV_FETCH_USERINFO]
-                if(cb):
-                    cb(uimax,self.data)
             try:
-                uidb.udel(uimax.name)
+                uidb.dbdel(uimax)
             except KeyError,e:
                 bdcpanic(e)
 
@@ -263,33 +245,61 @@ class baidufetch:
     def __init__(self):
         self.browser=None
         self.sp=None
+        self.clickelem=None #save element when clicking
+        self.panelindex=0 #获取数据报错时,保存当前index
 
     def start(self):
         self.browser = webdriver.Firefox()
+        self.browser.implicitly_wait(10)
+
+    def findhelper(self,callback,elem=None,data=None):
+        assert callback is not None
+        while True:
+            try:
+                ret=callback(self.browser,elem,data)
+                break
+            except Exception,e:
+                print e
+                time.sleep(1)
+        return ret
+
+    def clickhelper(self,elem):
+        try:
+            self.clickelem=elem
+            elem.click()
+            time.sleep(1)
+        except Exception,e:
+            print e
+            self.clickhelper(elem)
+ 
+    def goto(self,url):
+        self.browser.get(url)
 
     def getpanel(self,curuser): #获取个人订阅/粉丝项列表
         b=self.browser
         count=0
         pindex=None
-        sp=self.sp
+        uidb=self.sp.uidb
 
         pagesize=self.getpanelpagesize()
         assert (pagesize>0)
         print "total %d pages" % (pagesize)
 
         while(count<pagesize):
-            try:
-                v1=b.find_element_by_class_name(PANEL_CLASS)
+            def _getpanel(browser,el,data):
+                fe=data
+                sp=fe.sp
+
+                v1=browser.find_element_by_class_name(PANEL_CLASS)
                 v2=v1.find_elements_by_class_name(PANEL_CLASS2)
-            except Exception,e:
-                print e
-                time.sleep(2)
-                continue
-            pindex=0
-            while(pindex<len(v2)):
-                #parse one userdata to userinfo
-                elem=v2[pindex]
-                try:
+                pindex=0
+                #恢复panelindex
+                if fe.panelindex is not 0:
+                    pindex=fe.panelindex
+
+                while(pindex<len(v2)):
+                    #parse one userdata to userinfo
+                    elem=v2[pindex]
                     vu=elem.find_element_by_class_name(PANEL_USERNAME_CLASS)
                     v3=elem.find_element_by_class_name(PANEL_PANEL_CLASS)
                     v4=v3.find_elements_by_css_selector(PANEL_PANEL_CLASS2)
@@ -303,108 +313,95 @@ class baidufetch:
                     useradd.subcribeurl=v4[PANEL_SUB].get_attribute(HREF)
                     useradd.listenersize=v4[PANEL_LISTENER].find_elements_by_xpath("b")[0].text
                     useradd.listenerurl=v4[PANEL_LISTENER].get_attribute(HREF)
-                except Exception,e:
-                    print e
-                    time.sleep(2)
-                    continue
+                    useradd.sharesize=tointhelper(useradd.sharesize)
+                    useradd.albumsize=tointhelper(useradd.albumsize)
+                    useradd.subscribesize=tointhelper(useradd.subscribesize)
+                    useradd.listenersize=tointhelper(useradd.listenersize)
+                    useradd.flag=FLAG_UI_USE
+                    fe.panelindex=pindex
+                    
+                    if(DDEBUG):
+                        print "getuserinfo name:%s sharesize:%d albumsize:%d subsize:%d listenersize:%d shareurl:%s" % (useradd.name,useradd.sharesize,useradd.albumsize,useradd.subscribesize,useradd.listenersize,useradd.shareurl)
 
-                useradd.sharesize=tointhelper(useradd.sharesize)
-                useradd.albumsize=tointhelper(useradd.albumsize)
-                useradd.subscribesize=tointhelper(useradd.subscribesize)
-                useradd.listenersize=tointhelper(useradd.listenersize)
-                useradd.flag=FLAG_UI_USE
-
-                if(DDEBUG):
-                    print "getuserinfo name:%s sharesize:%d albumsize:%d subsize:%d listenersize:%d shareurl:%s" % (useradd.name,useradd.sharesize,useradd.albumsize,useradd.subscribesize,useradd.listenersize,useradd.shareurl)
-
-                if(curuser.name==useradd.name): #过滤自己
+                    if(curuser.name==useradd.name): #过滤自己
+                        pindex+=1
+                        continue
+                    ret=uidb.dbexists(useradd)
+                    if ret is not FLAG_UI_IN_DELDICT: 
+                        uidb.dbadd(useradd)
                     pindex+=1
-                    continue
-                ret=sp.uidb.dbexists(useradd)
-                if ret is not FLAG_UI_IN_DELDICT: 
-                    sp.uidb.dbadd(useradd)
-                pindex+=1
+                fe.panelindex=0
+                return pindex
 
-            print "fetch %d userinfo in page%d totalpage:%d" % (pindex,(count+1),pagesize)
+            size=self.findhelper(_getpanel,elem=None,data=self)
+            print "fetch %d userinfo in page%d totalpage:%d" % (size,(count+1),pagesize)
             if(pagesize>1):
                 nextpage=self.getpanelnextpage()
-                clickhelper(nextpage)
+                self.clickhelper(nextpage)
             count+=1
 
     def fetchuserinfo(self,user,data):
         b=self.browser
         if(user.subscribesize>0):
             print "goto subscribeurl"
-            goto(b,user.subcribeurl)
+            self.goto(user.subcribeurl)
             self.getpanel(user)
 
-        if(user.listenersize>0):
-            print "goto listenerurl"
-            goto(b,user.listenerurl)
-            self.getpanel(user)
+        #if(user.listenersize>0):
+        #    print "goto listenerurl"
+        #    self.goto(user.listenerurl)
+        #    self.getpanel(user)
 
     def getpanelnextpage(self):
-        b=self.browser
-        while True:
-            try:
-                pc=b.find_element_by_class_name(PANEL_CLASS)
-                pi=pc.find_element_by_id(PANEL_PAGING_ID)
-                pc1=pi.find_element_by_class_name(PAGESIZE1_CLASS)
-                nextpage=pc1.find_element_by_class_name(PAGENEXT)
-                break
-            except Exception,e:
-                print e
-                time.sleep(2)
+        def _getpage(browser,elem=None,data=None):
+            pc=browser.find_element_by_class_name(PANEL_CLASS)
+            pi=pc.find_element_by_id(PANEL_PAGING_ID)
+            pc1=pi.find_element_by_class_name(PAGESIZE1_CLASS)
+            nextpage=pc1.find_element_by_class_name(PAGENEXT)
+            return nextpage
+        nextpage=self.findhelper(_getpage)
+
         return nextpage
 
     def getpanelpagesize(self):
         b=self.browser
-        while True:
+        def _getpanelpagesize(browser,elem=None,data=None):
             try:
-                b.switch_to.frame(0)
-                pc=b.find_element_by_class_name(PANEL_CLASS)
+                browser.switch_to.frame(0)
+                pc=browser.find_element_by_class_name(PANEL_CLASS)
                 pi=pc.find_element_by_id(PANEL_PAGING_ID)
                 pc1=pi.find_element_by_class_name(PAGESIZE1_CLASS)
                 pagesize=pc1.find_element_by_class_name(PAGESIZE_CLASS).text
-                break
             except common.exceptions.NoSuchElementException,e:
                 if(DDEBUG):
                     print "only one page"
                 pagesize=1
-                break
-            except Exception,e:
-                print e
-                time.sleep(2)
+            return pagesize
+        pagesize=self.findhelper(_getpanelpagesize)
         pagesize=int(pagesize)
         return pagesize
 
     def getnextpage(self):
-        while True:
-            try:
-                pi=self.browser.find_element_by_id(PAGEVIEW_ID)
-                pc1=pi.find_element_by_class_name(PAGESIZE1_CLASS)
-                nextpage=pc1.find_element_by_class_name(PAGENEXT)
-                break
-            except Exception,e:
-                print e
-                time.sleep(2)
+        def _getnextpage(browser,elem=None,data=None):
+            pi=self.browser.find_element_by_id(PAGEVIEW_ID)
+            pc1=pi.find_element_by_class_name(PAGESIZE1_CLASS)
+            nextpage=pc1.find_element_by_class_name(PAGENEXT)
+            return nextpage
+        nextpage=self.findhelper(_getnextpage)
         return nextpage
 
     def getpagesize(self):
-        while True:
+        def _getpagesize(browser,elem=None,data=None):
             try:
-                pi=self.browser.find_element_by_id(PAGEVIEW_ID)
+                pi=browser.find_element_by_id(PAGEVIEW_ID)
                 pc1=pi.find_element_by_class_name(PAGESIZE1_CLASS)
                 pagesize=pc1.find_element_by_class_name(PAGESIZE_CLASS).text
-                break
             except common.exceptions.NoSuchElementException,e:
                 if(DDEBUG):
                     print "only one page"
                 pagesize=1
-                break
-            except Exception,e:
-                print e
-                time.sleep(2)
+            return pagesize
+        pagesize=self.findhelper(_getpagesize)
         pagesize=int(pagesize)
         return pagesize
 
@@ -412,7 +409,7 @@ class baidufetch:
         b=self.browser
         uidb=self.sp.uidb
 
-        goto(b,user.shareurl)
+        self.goto(user.shareurl)
         v1=b.find_element_by_class_name(USERNAME_CLASS)
         v2=v1.find_element_by_class_name(USERNAME_CLASS2)
         user.name=v2.text
@@ -451,28 +448,24 @@ class baidufetch:
         count=0
 
         print "goto %s sourcelist" % (src.name)
-        goto(b,src.shareurl)
+        self.goto(src.shareurl)
 
         pagesize=self.getpagesize()
         assert (pagesize>0)
         print "total %d pages" % (pagesize)
+        def _getsrc(browser,elem=None,data=None):
+            se=browser.find_element_by_id(SOURCEVIEW_ID) 
+            selist=se.find_elements_by_class_name(SOURCEVIEWLIST_CLASS)
+            for elem in selist:
+                fd=sourcedata(elem.text,elem.get_attribute(SOURCEURL_ATTR))
+                fd.sharetime=elem.find_element_by_class_name(SHARETIME_CLASS).text
+                flist.append(fd)
+            return selist
         while(count<pagesize):
-            while True:
-                try:
-                    se=b.find_element_by_id(SOURCEVIEW_ID) 
-                    selist=se.find_elements_by_class_name(SOURCEVIEWLIST_CLASS)
-                    for elem in selist:
-                        fd=sourcedata(elem.text,elem.get_attribute(SOURCEURL_ATTR))
-                        fd.sharetime=elem.find_element_by_class_name(SHARETIME_CLASS).text
-                        flist.append(fd)
-                    break
-                except Exception,e:
-                    print e
-                    time.sleep(2)
-
+            selist=self.findhelper(_getsrc)
             if pagesize>1:
                 nextpage=self.getnextpage()
-                clickhelper(nextpage)
+                self.clickhelper(nextpage)
             fsize+=len(selist)
             print "fetch %d sources in page%d totalpage:%d" % (len(selist),(count+1),pagesize)
             if(sp.dbwriter):
