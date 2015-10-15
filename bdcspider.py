@@ -8,6 +8,8 @@ import time
 import locale
 import signal
 import sys
+import dbhash
+from bdmysqlDB import SourcedataDao
 
 DDEBUG=0
 VERSION=0.2
@@ -23,6 +25,8 @@ SOURCE_FIRST=BASEURL+"/share/home?uk=1864871638"
 #sourcelist
 SOURCEVIEW_ID="infiniteListView"
 SOURCEVIEWLIST_CLASS="clearfix"
+SOURCENAME_CLASS="file-col"
+SOURCETITLE_ATTR="title"
 SOURCEURL_ATTR="_link"
 SHARETIME_CLASS="time-col"
 
@@ -98,6 +102,47 @@ def bdcpanic(msg):
     print "--------------------------------------------------------"
     sys.exit(-1)
 
+
+#####################################################################################################
+URLDB="urlcache"
+class urlcache:
+    def __init__(self):
+        self.uc=dict()
+        self.size=0
+
+    def haskey(self,key):
+        try:
+            return self.uc[key];
+        except KeyError,e:
+            return None
+
+    def setkv(self,key,val):
+        try:
+            self.uc[key]=val
+            self.size+=1
+        except KeyError,e:
+            pass
+
+    def save(self):
+        try:
+            dbh=dbhash.open(URLDB,"w")
+        except Exception,e:
+            bdcpanic(e)
+        items=self.uc.keys()
+        for item in items:
+            dbh[str(item)]="a"
+        dbh.sync()
+
+    def load(self):
+        try:
+            dbh=dbhash.open(URLDB,"r")
+        except Exception,e:
+            return
+        self.uc[dbh.first()[0]]="a"
+        self.size+=1
+        for i in xrange(1, len(dbh)):
+            self.uc[dbh.next()[0]]="a"
+            self.size+=1
 
 #####################################################################################################
 class userinfo:
@@ -182,6 +227,7 @@ class dbwriter:
     def __init__(self,path):
         try:
             self.fd=open(path,"w")
+            self.sdDao = SourcedataDao()
         except IOError,e:
             bdcpanic(e)
 
@@ -189,15 +235,18 @@ class dbwriter:
         self.__dbwrite(flist)
 
     def __dbwrite(self,flist):
-        for f in flist:
-            name=f.name.encode("utf-8")
-            url=f.url.encode("utf-8")
-            st=f.sharetime.encode("utf-8")
-            try:
-                self.fd.write("name:%s url:%s sharetime:%s\n" % (name,url,st))
-                self.fd.flush()
-            except IOError,e:
-                bdcpanic(e)
+        self.sdDao.batchInsert(flist)
+
+        #for f in flist:
+        #    name=f.name
+        #    url=f.url.encode("utf-8")
+        #    st=f.sharetime.encode("utf-8")
+        #print name
+         #   try:
+         #       self.fd.write("name:%s url:%s sharetime:%s\n" % (name,url,st))
+         #       self.fd.flush()
+         #   except IOError,e:
+         #       bdcpanic(e)
 
     def finish(self):
         self.fd.close()
@@ -273,7 +322,11 @@ class baidufetch:
             self.clickhelper(elem)
  
     def goto(self,url):
-        self.browser.get(url)
+        try:
+            self.browser.get(url)
+            time.sleep(1)
+        except Exception,e:
+            self.goto(url)
 
     def getpanel(self,curuser): #获取个人订阅/粉丝项列表
         b=self.browser
@@ -454,28 +507,34 @@ class baidufetch:
         assert (pagesize>0)
         print "total %d pages" % (pagesize)
         def _getsrc(browser,elem=None,data=None):
+            elemsize=0
             se=browser.find_element_by_id(SOURCEVIEW_ID) 
             selist=se.find_elements_by_class_name(SOURCEVIEWLIST_CLASS)
             for elem in selist:
-                fd=sourcedata(elem.text,elem.get_attribute(SOURCEURL_ATTR))
+                title=elem.find_element_by_class_name(SOURCENAME_CLASS)
+                fd=sourcedata(title.get_attribute(SOURCETITLE_ATTR),elem.get_attribute(SOURCEURL_ATTR))
                 fd.sharetime=elem.find_element_by_class_name(SHARETIME_CLASS).text
+                if sp.urlcache.haskey(fd.url) is not None:
+                    print "filter repeat url:%s" % fd.url
+                    continue
+                sp.urlcache.setkv(fd.url,1)
+                elemsize+=1
                 flist.append(fd)
-            return selist
+            return elemsize
         while(count<pagesize):
-            selist=self.findhelper(_getsrc)
+            elemsize=self.findhelper(_getsrc)
             if pagesize>1:
                 nextpage=self.getnextpage()
                 self.clickhelper(nextpage)
-            fsize+=len(selist)
-            print "fetch %d sources in page%d totalpage:%d" % (len(selist),(count+1),pagesize)
+            fsize+=elemsize
+            print "fetch %d sources in page%d totalpage:%d" % (elemsize,(count+1),pagesize)
             if(sp.dbwriter):
                 sp.dbwriter.dbwrite(flist)
+            del flist[0:len(flist)]
             count+=1
 
         if(src.sharesize>fsize):
             sp.dropsrcs=src.sharesize-fsize
-        elif(src.sharesize<fsize):
-            print "maybe user shares new when fetching..."
         sp.fetchsrcs+=fsize
 
 #####################################################################################################
@@ -489,10 +548,10 @@ class spider:
         self.dbwriter=None
         self.fetchsrcs=0
         self.dropsrcs=0
+        self.urlcache=urlcache()
 
     def adddbwriter(self,w):
         self.dbwriter=w
-
 
     def addfetcher(self,fe):
         self.fetch=fe
@@ -505,6 +564,8 @@ class spider:
         print locale.getdefaultlocale()
 
     def start(self):
+        self.urlcache.load()
+        print "load %d urls in urlcache..." % self.urlcache.size
         self.fetch.start()
         self.ev.loop()
 
@@ -513,18 +574,20 @@ class spider:
         print "-------------------------stat-----------------------------"
         print "fetchsources:%d dropsources:%d repeat users:%d drop users:%d" % (self.fetchsrcs,self.dropsrcs,self.uidb.repusers,self.uidb.dropusers)
         print "%d userinfo waiting,%d userinfo finished in userdb" % (len(self.uidb.uidict),len(self.uidb.finishuidict))
+        print "save %d urls in urlcache..." % self.urlcache.size
         print "run time %ds" % (self.end_time-self.start_time)
         print "----------------------------------------------------------"
 
     def finish(self):
+        print "save urlcache..."
+        self.urlcache.save()
+        print "saved"
         self.stat()
         self.dbwriter.finish()
         #self.fetch.finish()  #todo exception when firefox quit
 
-
-sp=spider()
-
 #####################################################################################################
+sp=spider()
 def main():
     signal.signal(signal.SIGINT, signal_handler)
     fe=baidufetch()
@@ -545,4 +608,5 @@ def main():
 
 if __name__=="__main__":
     main()
+
 #####################################################################################################
