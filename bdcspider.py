@@ -8,12 +8,13 @@ import time
 import locale
 import signal
 import sys
-import dbhash
 from bdmysqlDB import SourcedataDao
+import dbhash
 
 DDEBUG=0
-VERSION=0.2
+VERSION=0.8
 APP="bdcspider"
+DBSOURCE="bdcsources.txt"
 
 #event flags
 FLAG_EV_FETCH_USERINFO=1
@@ -104,10 +105,13 @@ def bdcpanic(msg):
 
 
 #####################################################################################################
-URLDB="urlcache"
-class urlcache:
-    def __init__(self):
+URLDB="urldb"
+USERDB="userdb"
+FHUSERDB="fhuserdb"
+class dbcache:
+    def __init__(self,name):
         self.uc=dict()
+        self.fn=name
         self.size=0
 
     def haskey(self,key):
@@ -125,23 +129,32 @@ class urlcache:
 
     def save(self):
         try:
-            dbh=dbhash.open(URLDB,"w")
+            dbh=dbhash.open(self.fn,"w")
         except Exception,e:
             bdcpanic(e)
-        items=self.uc.keys()
-        for item in items:
-            dbh[str(item)]="a"
+        ks=self.uc.keys()
+        for k in ks:
+            k=str(k)
+            dbh[k]=str(self.uc[k])
         dbh.sync()
+
+    def clear(self):
+        self.size=0
+        self.uc.clear()
 
     def load(self):
         try:
-            dbh=dbhash.open(URLDB,"r")
+            dbh=dbhash.open(self.fn,"r")
         except Exception,e:
             return
-        self.uc[dbh.first()[0]]="a"
+        if len(dbh) == 0:
+            return
+        item=dbh.first() #key for item[0],val for item[1]
+        self.uc[str(item[0])]=str(item[1])
         self.size+=1
         for i in xrange(1, len(dbh)):
-            self.uc[dbh.next()[0]]="a"
+            item=dbh.next()
+            self.uc[str(item[0])]=str(item[1])
             self.size+=1
 
 #####################################################################################################
@@ -158,13 +171,58 @@ class userinfo:
         self.listenersize=0
         self.listenerurl=None
 
+    def getkey(self): 
+        return str(self.sharesize) + " " + self.shareurl
+
+    def setkey(self,key):
+        assert key is not None
+        split=key.split(" ")
+        if len(split)!=2:
+            bdcpanic("parse userinfo format failed");
+        self.sharesize=int(split[0])
+        self.shareurl=split[1]
+        if DDEBUG:
+            print "sharesize:%d shareurl:%s" % (self.sharesize,self.shareurl)
+
 #####################################################################################################
 class uidb: #userinfo database
     def __init__(self):
+        self.uicache=dbcache(USERDB)
+        self.fhcache=dbcache(FHUSERDB)
         self.uidict=dict() #running user database
-        self.finishuidict=dict() #run finished user database
+        self.finishuidict=dict() #finished user database
         self.repusers=0
         self.dropusers=0
+
+    def save(self):
+        for u in self.uidict.values():
+            self.uicache.setkv(u.getkey(),u.name)
+        for u in self.finishuidict.values():
+            self.fhcache.setkv(u.getkey(),u.name)
+        self.uicache.save()
+        print "saved userdb %d " % self.uicache.size
+        self.fhcache.save()
+        print "saved finished userdb %d " % self.fhcache.size
+
+    def load(self):
+        self.uicache.load()
+        self.fhcache.load()
+        for u in self.uicache.uc.keys():
+            ui=userinfo()
+            ui.setkey(u)
+            ui.name=self.uicache.uc[u]
+            ui.flag=FLAG_UI_UNUSE
+            self.dbadd(ui)
+        print "load %d userinfo in dbcache..." % self.uicache.size
+        for u in self.fhcache.uc.keys():
+            ui=userinfo()
+            ui.setkey(u)
+            ui.name=self.fhcache.uc[u]
+            ui.flag=FLAG_UI_UNUSE
+            self.finishuidict[ui.name]=ui
+        print "load %d finished userinfo in dbcache..." % self.fhcache.size
+        self.uicache.clear()
+        self.fhcache.clear()
 
     def size(self):
         return len(self.uidict)
@@ -172,11 +230,11 @@ class uidb: #userinfo database
     #todo O(n)
     def getmaxsharesize(self):
         ud=self.uidict
+        assert len(ud) > 0
         uitems=ud.values()
         uimax=uitems[0]
         i=1
         l=len(uitems)
-        assert(len(uitems)>0)
 
         while(i<l):
             if(uimax.sharesize<uitems[i].sharesize):
@@ -184,10 +242,10 @@ class uidb: #userinfo database
             i+=1
         return uimax
 
-    def dbadd(self,user):
-        self.uidict[user.name]=user
+    def dbadd(self,user):# only in uidict,not finishuidict
+        self.uidict[user.shareurl]=user
 
-    def dbaddkv(self,key,val):
+    def dbaddkv(self,key,val):# only in uidict,not finishuidict
         self.uidict[key]=val
 
     def dbdelkey(self,key):
@@ -195,11 +253,11 @@ class uidb: #userinfo database
         self.finishuidict[key]=val
 
     def dbdel(self,user):
-        self.dbdelkey(user.name)
+        self.dbdelkey(user.shareurl)
 
     def dbexists(self,user):
         try:
-            if(self.uidict[user.name]):
+            if(self.uidict[user.shareurl]):
                 if(DDEBUG):
                     print "%s exist in dict" % (user.name)
                 self.repusers+=1
@@ -207,7 +265,7 @@ class uidb: #userinfo database
         except KeyError,e:
             pass
         try:
-            if(self.finishuidict[user.name]):
+            if(self.finishuidict[user.shareurl]):
                 if(DDEBUG):
                     print "%s exist in deldict" % (user.name)
                 self.dropusers+=1
@@ -215,6 +273,7 @@ class uidb: #userinfo database
         except KeyError,e:
             pass
         return FLAG_UI_NOT_IN_DICT
+
 #####################################################################################################
 class sourcedata:
     def __init__(self,n,u):
@@ -224,32 +283,36 @@ class sourcedata:
 
 #####################################################################################################
 class dbwriter:
-    def __init__(self,path):
-        try:
-            self.fd=open(path,"w")
+    def __init__(self,path=None):
+        if path is not None:
+            try:
+                self.fd=open(path,"w")
+            except IOError,e:
+                bdcpanic(e)
+        else:
+            self.fd=None
             self.sdDao = SourcedataDao()
-        except IOError,e:
-            bdcpanic(e)
 
     def dbwrite(self,flist):
         self.__dbwrite(flist)
 
     def __dbwrite(self,flist):
-        self.sdDao.batchInsert(flist)
-
-        #for f in flist:
-        #    name=f.name
-        #    url=f.url.encode("utf-8")
-        #    st=f.sharetime.encode("utf-8")
-        #print name
-         #   try:
-         #       self.fd.write("name:%s url:%s sharetime:%s\n" % (name,url,st))
-         #       self.fd.flush()
-         #   except IOError,e:
-         #       bdcpanic(e)
+        if(self.fd is None):
+            self.sdDao.batchInsert(flist)
+        else:
+            for f in flist:
+                name=f.name.encode("utf-8")
+                url=f.url.encode("utf-8")
+                st=f.sharetime.encode("utf-8")
+                try:
+                    self.fd.write("name:%s url:%s sharetime:%s\n" % (name,url,st))
+                    self.fd.flush()
+                except IOError,e:
+                    bdcpanic(e)
 
     def finish(self):
-        self.fd.close()
+        if self.fd is not None:
+            self.fd.close()
 
 #####################################################################################################
 class ev:
@@ -309,14 +372,14 @@ class baidufetch:
                 break
             except Exception,e:
                 print e
-                time.sleep(1)
+                time.sleep(2)
         return ret
 
     def clickhelper(self,elem):
         try:
             self.clickelem=elem
             elem.click()
-            time.sleep(1)
+            time.sleep(2)
         except Exception,e:
             print e
             self.clickhelper(elem)
@@ -324,7 +387,7 @@ class baidufetch:
     def goto(self,url):
         try:
             self.browser.get(url)
-            time.sleep(1)
+            time.sleep(2)
         except Exception,e:
             self.goto(url)
 
@@ -376,7 +439,7 @@ class baidufetch:
                     if(DDEBUG):
                         print "getuserinfo name:%s sharesize:%d albumsize:%d subsize:%d listenersize:%d shareurl:%s" % (useradd.name,useradd.sharesize,useradd.albumsize,useradd.subscribesize,useradd.listenersize,useradd.shareurl)
 
-                    if(curuser.name==useradd.name): #过滤自己
+                    if(curuser.shareurl==useradd.shareurl): #过滤自己
                         pindex+=1
                         continue
                     ret=uidb.dbexists(useradd)
@@ -458,7 +521,7 @@ class baidufetch:
         pagesize=int(pagesize)
         return pagesize
 
-    def parseuser(self,user): #首次运行，通过url获取用户共享数，订阅/粉丝项
+    def parseuser(self,user): #通过url获取用户共享数，订阅/粉丝项
         b=self.browser
         uidb=self.sp.uidb
 
@@ -483,8 +546,9 @@ class baidufetch:
         user.listenerurl=v2[0].get_attribute(HREF)
 
         #repair first user's dict
-        del uidb.uidict[user.shareurl]
-        uidb.dbadd(user)
+        if SOURCE_FIRST==user.shareurl:
+            del uidb.uidict[user.shareurl]
+            uidb.dbadd(user)
         user.flag=FLAG_UI_USE
 
         if(DDEBUG):
@@ -514,10 +578,10 @@ class baidufetch:
                 title=elem.find_element_by_class_name(SOURCENAME_CLASS)
                 fd=sourcedata(title.get_attribute(SOURCETITLE_ATTR),elem.get_attribute(SOURCEURL_ATTR))
                 fd.sharetime=elem.find_element_by_class_name(SHARETIME_CLASS).text
-                if sp.urlcache.haskey(fd.url) is not None:
+                if sp.dbcache.haskey(fd.url) is not None:
                     print "filter repeat url:%s" % fd.url
                     continue
-                sp.urlcache.setkv(fd.url,1)
+                sp.dbcache.setkv(fd.url,1)
                 elemsize+=1
                 flist.append(fd)
             return elemsize
@@ -548,7 +612,7 @@ class spider:
         self.dbwriter=None
         self.fetchsrcs=0
         self.dropsrcs=0
-        self.urlcache=urlcache()
+        self.dbcache=dbcache(URLDB)
 
     def adddbwriter(self,w):
         self.dbwriter=w
@@ -563,9 +627,12 @@ class spider:
         print "locale:",
         print locale.getdefaultlocale()
 
+    def prestart(self):
+        self.dbcache.load()
+        print "load %d urls in dbcache..." % self.dbcache.size
+        self.uidb.load()
+
     def start(self):
-        self.urlcache.load()
-        print "load %d urls in urlcache..." % self.urlcache.size
         self.fetch.start()
         self.ev.loop()
 
@@ -574,14 +641,15 @@ class spider:
         print "-------------------------stat-----------------------------"
         print "fetchsources:%d dropsources:%d repeat users:%d drop users:%d" % (self.fetchsrcs,self.dropsrcs,self.uidb.repusers,self.uidb.dropusers)
         print "%d userinfo waiting,%d userinfo finished in userdb" % (len(self.uidb.uidict),len(self.uidb.finishuidict))
-        print "save %d urls in urlcache..." % self.urlcache.size
+        print "save %d urls in dbcache..." % self.dbcache.size
         print "run time %ds" % (self.end_time-self.start_time)
         print "----------------------------------------------------------"
 
     def finish(self):
-        print "save urlcache..."
-        self.urlcache.save()
-        print "saved"
+        self.dbcache.save()
+        print "saved urldb %d " % self.dbcache.size
+        self.uidb.save()
+
         self.stat()
         self.dbwriter.finish()
         #self.fetch.finish()  #todo exception when firefox quit
@@ -589,20 +657,24 @@ class spider:
 #####################################################################################################
 sp=spider()
 def main():
+    reload(sys)
+    sys.setdefaultencoding("utf-8")
     signal.signal(signal.SIGINT, signal_handler)
     fe=baidufetch()
     ev=sp.ev
     ev.addlistener(FLAG_EV_FETCH_USERINFO,fe.fetchuserinfo)
     ev.addlistener(FLAG_EV_FETCH_SOURCE,fe.fetchsrcdata)
-    dbw=dbwriter("bdcsources.txt")
+    dbw=dbwriter()
     sp.addfetcher(fe)
     sp.adddbwriter(dbw)
-
-    firstsrc=userinfo()
-    firstsrc.flag=FLAG_UI_UNUSE
-    firstsrc.shareurl=SOURCE_FIRST
-    sp.uidb.dbaddkv(SOURCE_FIRST,firstsrc)
     sp.show()
+    sp.prestart()
+    if sp.uidb.size() == 0:
+        firstsrc=userinfo()
+        firstsrc.flag=FLAG_UI_UNUSE
+        firstsrc.shareurl=SOURCE_FIRST
+        sp.uidb.dbaddkv(SOURCE_FIRST,firstsrc)
+
     sp.start()
     sp.finish()
 
