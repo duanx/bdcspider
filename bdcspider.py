@@ -129,7 +129,7 @@ class dbcache:
 
     def save(self):
         try:
-            dbh=dbhash.open(self.fn,"w")
+            dbh=dbhash.open(self.fn,"n")
         except Exception,e:
             bdcpanic(e)
         ks=self.uc.keys()
@@ -219,8 +219,9 @@ class uidb: #userinfo database
             ui.setkey(u)
             ui.name=self.fhcache.uc[u]
             ui.flag=FLAG_UI_UNUSE
-            self.finishuidict[ui.name]=ui
+            self.finishuidict[ui.shareurl]=ui
         print "load %d finished userinfo in dbcache..." % self.fhcache.size
+
         self.uicache.clear()
         self.fhcache.clear()
 
@@ -286,7 +287,7 @@ class dbwriter:
     def __init__(self,path=None):
         if path is not None:
             try:
-                self.fd=open(path,"w")
+                self.fd=open(path,"n")
             except IOError,e:
                 bdcpanic(e)
         else:
@@ -443,7 +444,7 @@ class baidufetch:
                         pindex+=1
                         continue
                     ret=uidb.dbexists(useradd)
-                    if ret is not FLAG_UI_IN_DELDICT: 
+                    if ret != FLAG_UI_IN_DELDICT: 
                         uidb.dbadd(useradd)
                     pindex+=1
                 fe.panelindex=0
@@ -526,33 +527,35 @@ class baidufetch:
         uidb=self.sp.uidb
 
         self.goto(user.shareurl)
-        v1=b.find_element_by_class_name(USERNAME_CLASS)
-        v2=v1.find_element_by_class_name(USERNAME_CLASS2)
-        user.name=v2.text
 
-        v1=b.find_element_by_class_name(USERINFO_CLASS)
-        v2=v1.find_element_by_id(SHARESIZE_ID)
-        user.sharesize=tointhelper(v2.text)
+        def _parseuser(browser,elem=None,data=None):
+            user=data
+            v1=browser.find_element_by_class_name(USERNAME_CLASS)
+            v2=v1.find_element_by_class_name(USERNAME_CLASS2)
+            user.name=v2.text
 
-        v2=v1.find_element_by_id(ALBUMSIZE_ID)
-        user.albumsize=tointhelper(v2.text)
+            v1=b.find_element_by_class_name(USERINFO_CLASS)
+            v2=v1.find_element_by_id(SHARESIZE_ID)
+            user.sharesize=tointhelper(v2.text)
 
-        v2=v1.find_elements_by_class_name(SUBSIZE_CLASS)
-        user.subscribesize=tointhelper(v2[1].text)
-        user.subcribeurl=v2[0].get_attribute(HREF)
+            v2=v1.find_element_by_id(ALBUMSIZE_ID)
+            user.albumsize=tointhelper(v2.text)
 
-        v2=v1.find_elements_by_class_name(LISTENERSIZE_CLASS)
-        user.listenersize=tointhelper(v2[1].text)
-        user.listenerurl=v2[0].get_attribute(HREF)
+            v2=v1.find_elements_by_class_name(SUBSIZE_CLASS)
+            user.subscribesize=tointhelper(v2[1].text)
+            user.subcribeurl=v2[0].get_attribute(HREF)
 
-        #repair first user's dict
-        if SOURCE_FIRST==user.shareurl:
-            del uidb.uidict[user.shareurl]
-            uidb.dbadd(user)
-        user.flag=FLAG_UI_USE
+            v2=v1.find_elements_by_class_name(LISTENERSIZE_CLASS)
+            user.listenersize=tointhelper(v2[1].text)
+            user.listenerurl=v2[0].get_attribute(HREF)
+
+            user.flag=FLAG_UI_USE
+            return user
+
+        user=self.findhelper(_parseuser,elem=None,data=user)
 
         if(DDEBUG):
-            print "parseuser name:%s sharesize:%s albumsize:%s subsize:%d listenersize:%d url:%s" % (src.name,src.sharesize,src.albumsize,src.subscribesize,src.listenersize,src.listenerurl)
+            print "parseuser name:%s sharesize:%s albumsize:%s subsize:%d listenersize:%d url:%s" % (user.name,user.sharesize,user.albumsize,user.subscribesize,user.listenersize,user.listenerurl)
 
     def finish(self):
         self.browser.quit()
