@@ -39,7 +39,7 @@ if(!$key)
     $key="null";
 
 @$start=$_GET['start'];
-define("PWD", "Duanx1234");
+define("PWD", "duanx");
 define("NAME", "root");
 define("SERVER", "localhost:3306");
 define("DB", "test");
