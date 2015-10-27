@@ -567,7 +567,7 @@ class baidufetch:
         fsize=0
         count=0
 
-        print "goto %s sourcelist" % (src.name)
+        print "goto %s sourcelist" % (src.name.encode("utf-8"))
         self.goto(src.shareurl)
 
         pagesize=self.getpagesize()
